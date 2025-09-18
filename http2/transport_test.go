@@ -5410,6 +5410,52 @@ func TestIssue67671(t *testing.T) {
 	}
 }
 
+// Issue 70809: when StrictMaxConcurrentStreams enabled ClientConn.ReserveNewRequest() causes stalls in request processing
+func TestIssue70809(t *testing.T) {
+	ts := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {}, func(s *Server) {
+		s.MaxConcurrentStreams = 1
+	})
+	tr := &Transport{
+		TLSClientConfig:            tlsConfigInsecure,
+		AllowHTTP:                  true,
+		StrictMaxConcurrentStreams: true,
+	}
+
+	var opt RoundTripOpt
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	get := func() int {
+		req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL, nil)
+		res, err := tr.RoundTripOpt(req, opt)
+		if err != nil {
+			t.Error(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	if get() != 200 {
+		t.Fatal("first request failed")
+	}
+
+	// Do not dial new connections.
+	opt.OnlyCachedConn = true
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if get() != 200 {
+				t.Errorf("request failed")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func TestTransport1xxLimits(t *testing.T) {
 	for _, test := range []struct {
 		name    string
